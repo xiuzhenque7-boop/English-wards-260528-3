@@ -109,6 +109,38 @@ export default function WordLibrary({
   const masteredCount = words.filter(w => w.correctCount > 0 && w.wrongCount === 0).length;
   const masterPercentage = totalCount > 0 ? Math.round((masteredCount / totalCount) * 100) : 0;
 
+  // Helper to safely handle fetching and reporting serverless/express host incompatibility
+  const safeFetchJson = async (url: string, options: RequestInit) => {
+    let response;
+    try {
+      response = await fetch(url, options);
+    } catch (networkErr: any) {
+      throw new Error(`网络连接失败：请检查网络连接，或确保后台后端正在运行。\n(错误信息: ${networkErr.message})`);
+    }
+
+    const contentType = response.headers.get("content-type") || "";
+    if (!response.ok) {
+      if (contentType.includes("text/html")) {
+        const text = await response.text();
+        if (text.includes("The page") || text.includes("not found") || text.includes("Cannot GET") || text.includes("Cannot POST") || text.includes("404")) {
+          throw new Error("⚠️ Vercel/静态托管限制：当前 API 端点返回了 HTML 错误。这通常是因为当前应用部署在了纯静态平台（如 Vercel 免费版，且未配置 Serverless functions），并没有正确运行 Express (node) 后端服务器。建议您直接在 Google AI Studio 平台中使用一键部署到 Cloud Run (可完美、完整地运行 Express 后端与 AI 分析)，或者检查您的 Vercel Serverless Functions 配置。");
+        }
+      }
+      throw new Error(`服务器响应错误：HTTP 状态码 ${response.status}`);
+    }
+
+    if (!contentType.includes("application/json")) {
+      const textPreview = (await response.text()).slice(0, 100);
+      throw new Error(`接口响应格式错误：期望 JSON 格式，但收到了非 JSON (如 HTML/Text) 内容。\n这说明您当前的部署环境（例如 Vercel 静态解析）未运行后台 Express 服务，直接返回了前端首页。\n收到内容前缀: "${textPreview}..."`);
+    }
+
+    try {
+      return await response.json();
+    } catch (parseErr: any) {
+      throw new Error(`JSON 解析异常：${parseErr.message}。收到的内容格式不符合 JSON 规范。`);
+    }
+  };
+
   // Handle manual enrich with Gemini API
   const handleEnrichManualWord = async () => {
     if (!manualWord.trim()) {
@@ -118,13 +150,12 @@ export default function WordLibrary({
     setIsEnrichingManual(true);
     setErrorMsg(null);
     try {
-      const response = await fetch("/api/generate-from-words", {
+      const data = await safeFetchJson("/api/generate-from-words", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ text: manualWord.trim() })
       });
-      const data = await response.json();
-      if (!response.ok || !data.success || !data.words || data.words.length === 0) {
+      if (!data.success || !data.words || data.words.length === 0) {
         throw new Error(data.error || "获取单词数据失败。");
       }
       const enriched = data.words[0];
@@ -170,13 +201,12 @@ export default function WordLibrary({
     setIsProcessing(true);
     setErrorMsg(null);
     try {
-      const response = await fetch("/api/generate-from-words", {
+      const data = await safeFetchJson("/api/generate-from-words", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ text: batchTextInput })
       });
-      const data = await response.json();
-      if (!response.ok || !data.success) {
+      if (!data.success) {
         throw new Error(data.error || "解析单词词义失败。");
       }
       setPreviewImportWords(data.words);
@@ -244,14 +274,13 @@ export default function WordLibrary({
       const base64Data = imagePreviewUrl.split(",")[1];
       const mimeType = selectedImageFile.type;
 
-      const response = await fetch("/api/generate-from-image", {
+      const data = await safeFetchJson("/api/generate-from-image", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ image: base64Data, mimeType })
       });
 
-      const data = await response.json();
-      if (!response.ok || !data.success) {
+      if (!data.success) {
         throw new Error(data.error || "提取图片词汇失败，请确保图片清晰或手动添加。");
       }
 
