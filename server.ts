@@ -13,6 +13,11 @@ const PORT = 3000;
 app.use(express.json({ limit: "15mb" }));
 app.use(express.urlencoded({ limit: "15mb", extended: true }));
 
+// Silence browser favicon 404 logs
+app.get("/favicon.ico", (req, res) => {
+  res.status(204).end();
+});
+
 // Lazy init Gemini client or instantiate dynamically per request to support custom key headers
 function getAIClient(clientKey?: string) {
   const apiKey = clientKey || process.env.GEMINI_API_KEY;

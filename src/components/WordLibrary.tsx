@@ -161,6 +161,187 @@ export default function WordLibrary({
     }
   };
 
+  const fetchGeminiFromWordsDirectly = async (apiKey: string, text: string) => {
+    const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-3.5-flash:generateContent?key=${apiKey}`;
+    
+    const prompt = `You are an expert English teacher. The user provided the following input:
+"${text}"
+
+Extract or identify English vocabulary words/phrases from this input. If it is already a list of words, expand and enrich them. If it is a block of text, extract key educational interest/grade-appropriate English words from it (up to 20 words).
+
+For each English word/phrase, provide:
+1. The English word itself.
+2. The standard IPA phonetic symbol enclosed in slashes (e.g., /ækˈtɪv.ə.ti/).
+3. The accurate Chinese description and part of speech (e.g., 'n. 活动').
+4. An illustrative, grammatically sound English example sentence.
+5. The high-quality Chinese translation of the example sentence.
+
+Avoid duplicates. Generate response strictly as a JSON array matching the schema.`;
+
+    const requestBody = {
+      contents: [
+        {
+          parts: [
+            {
+              text: prompt
+            }
+          ]
+        }
+      ],
+      generationConfig: {
+        responseMimeType: "application/json",
+        responseSchema: {
+          type: "ARRAY",
+          description: "A list of English words extracted or generated based on the user request, complete with phonetic guides, Chinese definitions, and high-quality example sentences.",
+          items: {
+            type: "OBJECT",
+            properties: {
+              word: {
+                type: "STRING",
+                description: "The English word or professional phrase (e.g., 'concept' or 'artificial intelligence'). Correct capitalization if needed."
+              },
+              phonetic: {
+                type: "STRING",
+                description: "The standard IPA (International Phonetic Alphabet) phonetic symbol enclosed in slashes, e.g. /æp.əl/ or /kənˈsept/."
+              },
+              meaning: {
+                type: "STRING",
+                description: "The primary and accurate Chinese translation of the word, along with part of speech (e.g. 'n. 苹果' or 'v. 确认')."
+              },
+              example: {
+                type: "STRING",
+                description: "A natural, helpful English example sentence that clearly demonstrates the usage of the word."
+              },
+              exampleTranslation: {
+                type: "STRING",
+                description: "The high-quality Chinese translation of the example sentence."
+              }
+            },
+            required: ["word", "phonetic", "meaning", "example", "exampleTranslation"]
+          }
+        },
+        temperature: 0.3
+      }
+    };
+
+    const res = await fetch(url, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json"
+      },
+      body: JSON.stringify(requestBody)
+    });
+
+    if (!res.ok) {
+      let errText = "";
+      try {
+        const errJson = await res.json();
+        errText = errJson?.error?.message || res.statusText;
+      } catch (e) {
+        errText = await res.text();
+      }
+      throw new Error(`直接访问 Google API 失败: ${errText} (HTTP ${res.status})`);
+    }
+
+    const data = await res.json();
+    const textResult = data.candidates?.[0]?.content?.parts?.[0]?.text;
+    if (!textResult) {
+      throw new Error("未能收到 Gemini 的识别文本。");
+    }
+
+    const parsedWords = JSON.parse(textResult.trim());
+    return { success: true, words: parsedWords };
+  };
+
+  const fetchGeminiFromImageDirectly = async (apiKey: string, base64Data: string, mimeType: string) => {
+    const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-3.5-flash:generateContent?key=${apiKey}`;
+    
+    const requestBody = {
+      contents: [
+        {
+          parts: [
+            {
+              inlineData: {
+                mimeType: mimeType,
+                data: base64Data
+              }
+            },
+            {
+              text: "You are an expert English lexicographer and tutor. Scan this image. " +
+                "Extract all English words or short vocabulary phrases written or pictured in it. " +
+                "For each word or phrase found, generate its standard IPA phonetic symbols, its primary " +
+                "Chinese meaning, write a very helpful English example sentence that highlights its context, " +
+                "and provide a Chinese translation of the example sentence. " +
+                "Output ONLY the JSON list corresponding to the requested schema. Do not include markdown wraps or conversational preambles."
+            }
+          ]
+        }
+      ],
+      generationConfig: {
+        responseMimeType: "application/json",
+        responseSchema: {
+          type: "ARRAY",
+          description: "A list of English words extracted or generated based on the user request, complete with phonetic guides, Chinese definitions, and high-quality example sentences.",
+          items: {
+            type: "OBJECT",
+            properties: {
+              word: {
+                type: "STRING",
+                description: "The English word or professional phrase (e.g., 'concept' or 'artificial intelligence'). Correct capitalization if needed."
+              },
+              phonetic: {
+                type: "STRING",
+                description: "The standard IPA (International Phonetic Alphabet) phonetic symbol enclosed in slashes, e.g. /æp.əl/ or /kənˈsept/."
+              },
+              meaning: {
+                type: "STRING",
+                description: "The primary and accurate Chinese translation of the word, along with part of speech (e.g. 'n. 苹果' or 'v. 确认')."
+              },
+              example: {
+                type: "STRING",
+                description: "A natural, helpful English example sentence that clearly demonstrates the usage of the word."
+              },
+              exampleTranslation: {
+                type: "STRING",
+                description: "The high-quality Chinese translation of the example sentence."
+              }
+            },
+            required: ["word", "phonetic", "meaning", "example", "exampleTranslation"]
+          }
+        },
+        temperature: 0.2
+      }
+    };
+
+    const res = await fetch(url, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json"
+      },
+      body: JSON.stringify(requestBody)
+    });
+
+    if (!res.ok) {
+      let errText = "";
+      try {
+        const errJson = await res.json();
+        errText = errJson?.error?.message || res.statusText;
+      } catch (e) {
+        errText = await res.text();
+      }
+      throw new Error(`直接访问 Google API 失败: ${errText} (HTTP ${res.status})`);
+    }
+
+    const data = await res.json();
+    const textResult = data.candidates?.[0]?.content?.parts?.[0]?.text;
+    if (!textResult) {
+      throw new Error("未能收到 Gemini 的识别文本。");
+    }
+
+    const parsedWords = JSON.parse(textResult.trim());
+    return { success: true, words: parsedWords };
+  };
+
   // Handle manual enrich with Gemini API
   const handleEnrichManualWord = async () => {
     if (!manualWord.trim()) {
@@ -170,11 +351,27 @@ export default function WordLibrary({
     setIsEnrichingManual(true);
     setErrorMsg(null);
     try {
-      const data = await safeFetchJson("/api/generate-from-words", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ text: manualWord.trim() })
-      });
+      const customKey = localStorage.getItem("lexis_custom_gemini_key") || "";
+      let data;
+      if (customKey) {
+        try {
+          data = await fetchGeminiFromWordsDirectly(customKey, manualWord.trim());
+        } catch (directErr: any) {
+          console.warn("Direct enrich API failed, falling back to server-side proxy...", directErr);
+          data = await safeFetchJson("/api/generate-from-words", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ text: manualWord.trim() })
+          });
+        }
+      } else {
+        data = await safeFetchJson("/api/generate-from-words", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ text: manualWord.trim() })
+        });
+      }
+
       if (!data.success || !data.words || data.words.length === 0) {
         throw new Error(data.error || "获取单词数据失败。");
       }
@@ -221,11 +418,27 @@ export default function WordLibrary({
     setIsProcessing(true);
     setErrorMsg(null);
     try {
-      const data = await safeFetchJson("/api/generate-from-words", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ text: batchTextInput })
-      });
+      const customKey = localStorage.getItem("lexis_custom_gemini_key") || "";
+      let data;
+      if (customKey) {
+        try {
+          data = await fetchGeminiFromWordsDirectly(customKey, batchTextInput);
+        } catch (directErr: any) {
+          console.warn("Direct batch API failed, falling back to server-side proxy...", directErr);
+          data = await safeFetchJson("/api/generate-from-words", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ text: batchTextInput })
+          });
+        }
+      } else {
+        data = await safeFetchJson("/api/generate-from-words", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ text: batchTextInput })
+        });
+      }
+
       if (!data.success) {
         throw new Error(data.error || "解析单词词义失败。");
       }
@@ -340,11 +553,26 @@ export default function WordLibrary({
       // Use image/jpeg since canvas downscales compressions are outputted as JPEG
       const mimeType = imagePreviewUrl.startsWith("data:image/jpeg") ? "image/jpeg" : selectedImageFile.type;
 
-      const data = await safeFetchJson("/api/generate-from-image", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ image: base64Data, mimeType })
-      });
+      let data;
+      const customKey = localStorage.getItem("lexis_custom_gemini_key") || "";
+      if (customKey) {
+        try {
+          data = await fetchGeminiFromImageDirectly(customKey, base64Data, mimeType);
+        } catch (directErr: any) {
+          console.warn("Direct OCR API failed, falling back to server-side proxy...", directErr);
+          data = await safeFetchJson("/api/generate-from-image", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ image: base64Data, mimeType })
+          });
+        }
+      } else {
+        data = await safeFetchJson("/api/generate-from-image", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ image: base64Data, mimeType })
+        });
+      }
 
       if (!data.success) {
         throw new Error(data.error || "提取图片词汇失败，请确保图片清晰或手动添加。");
