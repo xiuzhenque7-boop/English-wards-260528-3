@@ -57,6 +57,11 @@ export default function App() {
     };
   });
 
+  // Custom Gemini API Key fallback (kept strictly in user tool configuration)
+  const [customKey, setCustomKey] = useState<string>(() => {
+    return localStorage.getItem("lexis_custom_gemini_key") || "";
+  });
+
   // Available client voices
   const [availableVoices, setAvailableVoices] = useState<SpeechSynthesisVoice[]>([]);
   const [selectedVoiceName, setSelectedVoiceName] = useState<string>("");
@@ -69,6 +74,10 @@ export default function App() {
   useEffect(() => {
     localStorage.setItem("lexis_core_settings", JSON.stringify(settings));
   }, [settings]);
+
+  useEffect(() => {
+    localStorage.setItem("lexis_custom_gemini_key", customKey);
+  }, [customKey]);
 
   // Load voices for speech synthesis
   useEffect(() => {
@@ -924,6 +933,45 @@ export default function App() {
                       ))}
                     </select>
                   )}
+                </div>
+
+                {/* Custom Gemini API Key block for Vercel/Local troubleshooting */}
+                <div className="bg-slate-50 border border-slate-150 rounded-2xl p-5 space-y-3.5">
+                  <div className="flex items-center justify-between">
+                    <div>
+                      <h4 className="text-xs font-black text-slate-800 uppercase tracking-wider flex items-center gap-1.5">
+                        <Sparkles size={14} className="text-indigo-600 animate-pulse" />
+                        <span>自定义 Gemini API Key (可选项/故障排除)</span>
+                      </h4>
+                      <p className="text-[10px] text-slate-400 mt-1">
+                        如果您在 Vercel 部署环境或本地运行拍照识词 OCR 遇到 500 报错，可以使用您个人的 Gemini API Key 进行覆盖和直连。
+                      </p>
+                    </div>
+                  </div>
+                  <div className="relative">
+                    <input
+                      id="custom-api-key-input"
+                      type="password"
+                      placeholder="AI Studio 密钥 (例如 AIzaSyD...)"
+                      value={customKey}
+                      onChange={(e) => setCustomKey(e.target.value.trim())}
+                      className="w-full px-4 py-2.5 bg-white border border-slate-200 focus:border-indigo-500 rounded-xl text-xs font-mono tracking-widest focus:outline-none focus:ring-2 focus:ring-indigo-500/10 placeholder:font-sans placeholder:tracking-normal"
+                    />
+                    {customKey && (
+                      <button
+                        onClick={() => setCustomKey("")}
+                        className="absolute right-3.5 top-1/2 -translate-y-1/2 text-[10px] text-rose-500 hover:text-rose-700 font-bold hover:underline"
+                        title="清除自定义 Key"
+                      >
+                        清空密钥
+                      </button>
+                    )}
+                  </div>
+                  <div className="flex items-start gap-1 pb-0.5">
+                    <p className="text-[9.5px] leading-relaxed text-slate-450">
+                      🔒 <b>安全保障:</b> 您的 API Key 将<b>100% 仅保存在您当前浏览器的本地存储 (LocalStorage) 中</b>。向云端发起的所有请求仅经由 Express 代理服务器直透给 Google 官方 API 接口，不以任何形式转存，确保绝对的私密安全。
+                    </p>
+                  </div>
                 </div>
 
                 {/* Speed Rates Slider */}

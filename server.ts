@@ -13,24 +13,20 @@ const PORT = 3000;
 app.use(express.json({ limit: "15mb" }));
 app.use(express.urlencoded({ limit: "15mb", extended: true }));
 
-// Lazy init Gemini client to avoid crashes if API key is not ready during compile/run
-let aiClient: GoogleGenAI | null = null;
-function getAIClient() {
-  const apiKey = process.env.GEMINI_API_KEY;
+// Lazy init Gemini client or instantiate dynamically per request to support custom key headers
+function getAIClient(clientKey?: string) {
+  const apiKey = clientKey || process.env.GEMINI_API_KEY;
   if (!apiKey) {
-    throw new Error("GEMINI_API_KEY missing. Please configure it in the Secrets panel in AI Studio.");
+    throw new Error("GEMINI_API_KEY missing. 请确保您已在 Vercel 环境变量中设置 GEMINI_API_KEY，或在此应用“听写配置”页面添加您个人账户的 Gemini API Key。");
   }
-  if (!aiClient) {
-    aiClient = new GoogleGenAI({
-      apiKey: apiKey,
-      httpOptions: {
-        headers: {
-          "User-Agent": "aistudio-build",
-        },
+  return new GoogleGenAI({
+    apiKey: apiKey,
+    httpOptions: {
+      headers: {
+        "User-Agent": "aistudio-build",
       },
-    });
-  }
-  return aiClient;
+    },
+  });
 }
 
 // Word Schema for Structured JSON Response
@@ -75,7 +71,8 @@ app.post("/api/generate-from-image", async (req, res) => {
       return res.status(400).json({ error: "Missing image data or mimeType." });
     }
 
-    const ai = getAIClient();
+    const clientKey = req.headers["x-gemini-key"] as string | undefined;
+    const ai = getAIClient(clientKey);
 
     const imagePart = {
       inlineData: {
@@ -129,7 +126,8 @@ app.post("/api/generate-from-words", async (req, res) => {
       return res.status(400).json({ error: "Missing text input." });
     }
 
-    const ai = getAIClient();
+    const clientKey = req.headers["x-gemini-key"] as string | undefined;
+    const ai = getAIClient(clientKey);
 
     const prompt = `You are an expert English teacher. The user provided the following input:
 "${text}"

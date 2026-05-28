@@ -113,7 +113,15 @@ export default function WordLibrary({
   const safeFetchJson = async (url: string, options: RequestInit) => {
     let response;
     try {
-      response = await fetch(url, options);
+      const customKey = localStorage.getItem("lexis_custom_gemini_key") || "";
+      const headers = {
+        ...(options.headers || {}),
+      } as Record<string, string>;
+      if (customKey) {
+        headers["X-Gemini-Key"] = customKey;
+      }
+
+      response = await fetch(url, { ...options, headers });
     } catch (networkErr: any) {
       throw new Error(`网络连接失败：请检查网络连接，或确保后台后端正在运行。\n(错误信息: ${networkErr.message})`);
     }
@@ -230,20 +238,65 @@ export default function WordLibrary({
     }
   };
 
-  // Handle image selection
+  // Handle image selection with automatic client-side resize and compression to prevent payload errors and timeout
   const handleImageChange = (file: File) => {
     if (!file.type.startsWith("image/")) {
       setErrorMsg("请导入有效的图片文件。");
       return;
     }
-    setSelectedImageFile(file);
-    const reader = new FileReader();
-    reader.onload = () => {
-      setImagePreviewUrl(reader.result as string);
-    };
-    reader.readAsDataURL(file);
     setErrorMsg(null);
     setPreviewImportWords([]);
+    
+    const reader = new FileReader();
+    reader.onload = () => {
+      const img = new window.Image();
+      img.src = reader.result as string;
+      img.onload = () => {
+        let width = img.width;
+        let height = img.height;
+        const maxDim = 1200; // Optimal resolution for clear English characters while minimizing bandwidth/Vercel payload limits
+
+        if (width > maxDim || height > maxDim) {
+          if (width > height) {
+            height = Math.round((height * maxDim) / width);
+            width = maxDim;
+          } else {
+            width = Math.round((width * maxDim) / height);
+            height = maxDim;
+          }
+        }
+
+        const canvas = document.createElement("canvas");
+        canvas.width = width;
+        canvas.height = height;
+        const ctx = canvas.getContext("2d");
+        
+        if (ctx) {
+          ctx.drawImage(img, 0, 0, width, height);
+          try {
+            // Compress heavily into JPEG at 85% visual quality (reduces size by 90% while keeping words perfectly readable)
+            const compressedDataUrl = canvas.toDataURL("image/jpeg", 0.85);
+            setImagePreviewUrl(compressedDataUrl);
+            setSelectedImageFile(file);
+          } catch (e) {
+            console.error("Canvas compression failed", e);
+            setImagePreviewUrl(reader.result as string);
+            setSelectedImageFile(file);
+          }
+        } else {
+          setImagePreviewUrl(reader.result as string);
+          setSelectedImageFile(file);
+        }
+      };
+      img.onerror = () => {
+        setImagePreviewUrl(reader.result as string);
+        setSelectedImageFile(file);
+      };
+    };
+    reader.onerror = () => {
+      setErrorMsg("无法读取该图片，请重试。");
+    };
+    reader.readAsDataURL(file);
   };
 
   // Handle file drops
@@ -284,7 +337,8 @@ export default function WordLibrary({
     try {
       // Extract base64
       const base64Data = imagePreviewUrl.split(",")[1];
-      const mimeType = selectedImageFile.type;
+      // Use image/jpeg since canvas downscales compressions are outputted as JPEG
+      const mimeType = imagePreviewUrl.startsWith("data:image/jpeg") ? "image/jpeg" : selectedImageFile.type;
 
       const data = await safeFetchJson("/api/generate-from-image", {
         method: "POST",
