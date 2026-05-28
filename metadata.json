@@ -1,0 +1,6 @@
+{
+  "name": "English Vocabulary Dictation",
+  "description": "An interactive English dictation and vocabulary practice application with image OCR word extraction, AI-generated IPA phonetic symbols, example sentences, and wrong word tracking.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
