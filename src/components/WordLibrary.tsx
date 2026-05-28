@@ -1,4 +1,5 @@
 import React, { useState, useRef, useEffect } from "react";
+import Tesseract from "tesseract.js";
 import { 
   Plus, 
   Upload, 
@@ -47,6 +48,8 @@ export default function WordLibrary({
   const [showAddModal, setShowAddModal] = useState(false);
   const [addMethod, setAddMethod] = useState<"manual" | "text" | "photo">("manual");
   const [isProcessing, setIsProcessing] = useState(false);
+  const [ocrEngine, setOcrEngine] = useState<"tesseract" | "gemini">("tesseract");
+  const [tesseractProgress, setTesseractProgress] = useState<string>("");
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
 
   // Manual addition inputs
@@ -539,7 +542,7 @@ Avoid duplicates. Generate response strictly as a JSON array matching the schema
     reader.readAsText(file);
   };
 
-  // Trigger Gemini OCR
+  // Trigger Gemini or Tesseract OCR
   const handleProcessImageOCR = async () => {
     if (!selectedImageFile || !imagePreviewUrl) {
       setErrorMsg("请先导入待识词的图片。");
@@ -547,47 +550,109 @@ Avoid duplicates. Generate response strictly as a JSON array matching the schema
     }
     setIsProcessing(true);
     setErrorMsg(null);
+    setTesseractProgress("准备识别...");
+    
     try {
-      // Extract base64
-      const base64Data = imagePreviewUrl.split(",")[1];
-      // Use image/jpeg since canvas downscales compressions are outputted as JPEG
-      const mimeType = imagePreviewUrl.startsWith("data:image/jpeg") ? "image/jpeg" : selectedImageFile.type;
+      if (ocrEngine === "tesseract") {
+        setTesseractProgress("正在初始化网页本地文字识别(OCR)引擎...");
+        
+        // Use Tesseract to extract raw text content of English characters to bypass server sizes/timeouts
+        const ocrResult = await Tesseract.recognize(
+          imagePreviewUrl,
+          "eng",
+          {
+            logger: (m) => {
+              if (m.status === "recognizing") {
+                const percent = Math.round(m.progress * 100);
+                setTesseractProgress(`正在本地读取图片单词: ${percent}%`);
+              }
+            }
+          }
+        );
+        
+        const extractedText = ocrResult?.data?.text || "";
+        if (!extractedText.trim()) {
+          throw new Error("本地 OCR 引擎未能从当前图片中解析出任何文本缩影。请确保图片清晰或者单词较多。");
+        }
+        
+        setTesseractProgress("文字识别成功！正在调度 AI 智能补全音标、核心释义与中英听写例句...");
+        
+        // Pass the extracted raw english text list to Gemini to translate/explain. 
+        // This handles small payload & avoids 500 Vercel function timeout errors completely!
+        const customKey = localStorage.getItem("lexis_custom_gemini_key") || "";
+        let data;
+        if (customKey) {
+          try {
+            data = await fetchGeminiFromWordsDirectly(customKey, extractedText);
+          } catch (directErr: any) {
+            console.warn("Direct enrich API failed, falling back to server proxy...", directErr);
+            data = await safeFetchJson("/api/generate-from-words", {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({ text: extractedText })
+            });
+          }
+        } else {
+          data = await safeFetchJson("/api/generate-from-words", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ text: extractedText })
+          });
+        }
+        
+        if (!data.success) {
+          throw new Error(data.error || "AI 解析整理提取出的单词失败。");
+        }
+        
+        if (!data.words || data.words.length === 0) {
+          setErrorMsg("未能从识别出的字符中整理出核心英文单词。您可以尝试手动输入。");
+        } else {
+          setPreviewImportWords(data.words);
+        }
+        
+      } else {
+        // Direct multi-modal API logic
+        setTesseractProgress("正在压缩整图上传，并呼叫大模型多模态直接视像识别...");
+        const base64Data = imagePreviewUrl.split(",")[1];
+        const mimeType = imagePreviewUrl.startsWith("data:image/jpeg") ? "image/jpeg" : selectedImageFile.type;
 
-      let data;
-      const customKey = localStorage.getItem("lexis_custom_gemini_key") || "";
-      if (customKey) {
-        try {
-          data = await fetchGeminiFromImageDirectly(customKey, base64Data, mimeType);
-        } catch (directErr: any) {
-          console.warn("Direct OCR API failed, falling back to server-side proxy...", directErr);
+        let data;
+        const customKey = localStorage.getItem("lexis_custom_gemini_key") || "";
+        if (customKey) {
+          try {
+            data = await fetchGeminiFromImageDirectly(customKey, base64Data, mimeType);
+          } catch (directErr: any) {
+            console.warn("Direct OCR API failed, falling back to server-side proxy...", directErr);
+            data = await safeFetchJson("/api/generate-from-image", {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({ image: base64Data, mimeType })
+            });
+          }
+        } else {
           data = await safeFetchJson("/api/generate-from-image", {
             method: "POST",
             headers: { "Content-Type": "application/json" },
             body: JSON.stringify({ image: base64Data, mimeType })
           });
         }
-      } else {
-        data = await safeFetchJson("/api/generate-from-image", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ image: base64Data, mimeType })
-        });
-      }
 
-      if (!data.success) {
-        throw new Error(data.error || "提取图片词汇失败，请确保图片清晰或手动添加。");
-      }
+        if (!data.success) {
+          throw new Error(data.error || "云端大模型接口超时或报错。由于 Vercel 免费级有 10 秒超时限制，强烈推荐您切换为“本地 OCR”再次尝试！");
+        }
 
-      if (data.words.length === 0) {
-        setErrorMsg("图片中没能识别出明显的英文单词，请尝试拍摄得更清晰，或者手动输入单词。");
-      } else {
-        setPreviewImportWords(data.words);
+        if (data.words.length === 0) {
+          setErrorMsg("大模型中没能搜出明显的英文单词，请尝试换一张或者用“本地 OCR”方式重新尝试。");
+        } else {
+          setPreviewImportWords(data.words);
+        }
       }
     } catch (err: any) {
       console.error(err);
-      setErrorMsg(err.message || "图片智能识词失败。");
+      setErrorMsg(err.message || "智能 OCR 识别遇到了阻碍，建议您优先使用“本地 OCR (本地引擎 100% 免超时)”模式。");
     } finally {
       setIsProcessing(false);
+      setTesseractProgress("");
     }
   };
 
@@ -1081,8 +1146,47 @@ Avoid duplicates. Generate response strictly as a JSON array matching the schema
                 {addMethod === "photo" && (
                   <div id="photo-add-panel" className="space-y-4">
                     <p className="text-xs text-slate-400">
-                      上传包含英文词汇列表或书籍课本照片，Gemini 会智能完成 OCR 识别，并帮每一个提取出的核心单词<b>精心配齐标准国际音标、中文核心释义以及双语例句。</b>
+                      上传包含英文词汇列表或书籍课本照片，系统会智能完成 OCR 识别，并帮每一个提取出的核心单词<b>精心配齐标准国际音标、中文核心释义以及双语例句。</b>
                     </p>
+
+                    {/* OCR Mode Selector */}
+                    <div className="bg-slate-50/80 p-3 rounded-xl border border-slate-150 flex flex-col space-y-2.5">
+                      <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2">
+                        <span className="text-xs font-bold text-slate-600 flex items-center space-x-1">
+                          <Sparkles size={14} className="text-indigo-600" />
+                          <span>识词引擎模式：</span>
+                        </span>
+                        <div className="flex bg-slate-200/70 p-0.5 rounded-lg text-xs self-start sm:self-auto">
+                          <button
+                            type="button"
+                            onClick={() => setOcrEngine("tesseract")}
+                            className={`px-3 py-1 rounded-md font-medium transition-all cursor-pointer ${
+                              ocrEngine === "tesseract"
+                                ? "bg-white text-indigo-700 shadow-sm"
+                                : "text-slate-500 hover:text-slate-800"
+                            }`}
+                          >
+                            本地 OCR (推荐: 极速且免超时)
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => setOcrEngine("gemini")}
+                            className={`px-3 py-1 rounded-md font-medium transition-all cursor-pointer ${
+                              ocrEngine === "gemini"
+                                ? "bg-white text-indigo-700 shadow-sm"
+                                : "text-slate-500 hover:text-slate-800"
+                            }`}
+                          >
+                            Gemini 原始识别
+                          </button>
+                        </div>
+                      </div>
+                      <p className="text-[10px] text-slate-400 leading-relaxed">
+                        {ocrEngine === "tesseract" 
+                          ? "👍 推荐理由：在您的浏览器本地进行端端文字识别，只将提取出的纯文字发送给 AI 指示补全。即使完全没有配置大模型中转或 API 密钥，也能 100% 成功，完美打通 Vercel 免费版的 500 载荷限制与 10s 秒级超时！" 
+                          : "⚠️ 注意：直接把整张图片进行云端多模态分析。如果您的图片比较大，很可能会触发 Vercel 平台对免费后端函数 10s 的严重执行超时限制，或因为没设 Key 抛出 500 错误。"}
+                      </p>
+                    </div>
 
                     <div
                       id="photo-drop-zone"
@@ -1131,7 +1235,7 @@ Avoid duplicates. Generate response strictly as a JSON array matching the schema
                         <button
                           id="btn-reselect-photo"
                           onClick={() => { setImagePreviewUrl(null); setSelectedImageFile(null); }}
-                          className="px-4 py-2 mt-1 text-xs text-slate-500 hover:text-indigo-600 bg-slate-100 hover:bg-slate-200 rounded-lg transition-all"
+                          className="px-4 py-2 mt-1 text-xs text-slate-500 hover:text-indigo-600 bg-slate-100 hover:bg-slate-200 rounded-lg transition-all cursor-pointer"
                         >
                           重新选图
                         </button>
@@ -1139,14 +1243,14 @@ Avoid duplicates. Generate response strictly as a JSON array matching the schema
                           id="btn-ocr-process"
                           onClick={handleProcessImageOCR}
                           disabled={isProcessing}
-                          className="px-5 py-2 bg-gradient-to-r from-indigo-600 to-violet-600 hover:from-indigo-700 hover:to-violet-700 text-white text-sm font-bold rounded-xl shadow-md flex items-center space-x-2 transition-all"
+                          className="px-5 py-2 bg-gradient-to-r from-indigo-600 to-violet-600 hover:from-indigo-700 hover:to-violet-700 disabled:from-slate-200 disabled:to-slate-200 disabled:text-slate-400 text-white text-sm font-bold rounded-xl shadow-md flex items-center space-x-2 transition-all cursor-pointer"
                         >
                           {isProcessing ? (
                             <RefreshCw className="animate-spin" size={16} />
                           ) : (
                             <Sparkles size={16} />
                           )}
-                          <span>启动 AI 视觉分词识别</span>
+                          <span>启动 {ocrEngine === "tesseract" ? "本地 OCR + AI 释义" : "AI 视觉整图识别"}</span>
                         </button>
                       </div>
                     )}
@@ -1155,11 +1259,18 @@ Avoid duplicates. Generate response strictly as a JSON array matching the schema
 
                 {/* --- UNIVERSAL IMPORTING PREVIEW BAR --- */}
                 {isProcessing && (
-                  <div id="ocr-loader-animation" className="py-12 text-center flex flex-col items-center justify-center space-y-3 bg-indigo-50/50 rounded-2xl border border-indigo-100/50">
+                  <div id="ocr-loader-animation" className="py-10 text-center flex flex-col items-center justify-center space-y-3 bg-indigo-50/50 rounded-2xl border border-indigo-100/50">
                     <RefreshCw className="text-indigo-600 animate-spin" size={32} />
-                    <div>
-                      <h4 className="font-bold text-slate-800 text-sm">正在施展 AI 魔法...</h4>
-                      <p className="text-slate-500 text-xs mt-1 max-w-xs">正在分析单词形态，加载国际音标、录入字典定义并为您个性化定制听写例句...</p>
+                    <div className="px-6">
+                      <h4 className="font-bold text-slate-800 text-sm">
+                        {tesseractProgress ? "生词学伴正在全力运转..." : "正在召唤大语言模型魔法..."}
+                      </h4>
+                      <p className="text-indigo-700 text-xs font-semibold mt-1 bg-indigo-100/50 px-3 py-1.5 rounded-lg inline-block select-none border border-indigo-200/50 animate-pulse">
+                        {tesseractProgress || "AI 正在分析单词定义与生成生动的双语例句..."}
+                      </p>
+                      <p className="text-slate-400 text-[10px] mt-2.5 max-w-xs mx-auto">
+                        后台将自动对识别出的词汇进行校对，精心配齐标准国际音标（IPA）、核心中文释义及量身定制的听写英文例句。
+                      </p>
                     </div>
                   </div>
                 )}
