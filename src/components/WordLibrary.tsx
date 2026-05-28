@@ -120,6 +120,18 @@ export default function WordLibrary({
 
     const contentType = response.headers.get("content-type") || "";
     if (!response.ok) {
+      if (contentType.includes("application/json")) {
+        try {
+          const errData = await response.json();
+          if (errData && errData.error) {
+            throw new Error(`服务器错误：${errData.error}`);
+          }
+        } catch (e: any) {
+          if (e.message && e.message.startsWith("服务器错误：")) {
+            throw e;
+          }
+        }
+      }
       if (contentType.includes("text/html")) {
         const text = await response.text();
         if (text.includes("The page") || text.includes("not found") || text.includes("Cannot GET") || text.includes("Cannot POST") || text.includes("404")) {
